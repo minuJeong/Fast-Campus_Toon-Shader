@@ -4,6 +4,8 @@ Shader "Fast Campus/Lit - Toon"
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
     #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
+    #pragma multi_compile_fog
+    
     struct Attributes
     {
         float4 positionOS : POSITION;
@@ -19,6 +21,7 @@ Shader "Fast Campus/Lit - Toon"
         float2 uv : TEXCOORD0;
         float3 positionWS : TEXCOORD2;
         float4 color : COLOR;
+        float4 fogFactorAndGi : TEXCOORD3;
     };
 
     cbuffer UnityPerMaterial
@@ -26,12 +29,16 @@ Shader "Fast Campus/Lit - Toon"
         float _Offset;
         float _OutlineWidth;
         half4 _OutlineColor;
+        half3 _LitColorTint;
+        half3 _ShadeColorTint;
     }
 
-    Texture2D<half4> _BaseColor;
-    Texture2D<half4> _ShadeColor;
-    SamplerState sampler_BaseColor;
-    SamplerState sampler_ShadeColor;
+    Texture2D<half4> _BaseColorTex;
+    Texture2D<half4> _ShadeColorTex;
+    Texture2D<half4> _OutlineColorTex;
+    SamplerState sampler_BaseColorTex;
+    SamplerState sampler_ShadeColorTex;
+    SamplerState sampler_OutlineColorTex;
 
     float3 _LightDirection;
     float3 _LightPosition;
@@ -62,8 +69,11 @@ Shader "Fast Campus/Lit - Toon"
     Properties
     {
         _Offset ("Radiance Offset", Range(-1.0, 1.0)) = 0.0
-        _BaseColor ("Base Color", 2D) = "white" {}
-        _ShadeColor ("Shade Color", 2D) = "black" {}
+        _BaseColorTex ("Base Color", 2D) = "white" {}
+        _ShadeColorTex ("Shade Color", 2D) = "black" {}
+        _OutlineColorTex ("Shade Color", 2D) = "black" {}
+        [HDR] _LitColorTint ("Lit Color Tint", Color) = (1, 1, 1, 1)
+        [HDR] _ShadeColorTint ("Lit Color Tint", Color) = (1, 1, 1, 1)
         _OutlineWidth ("Outline Width", Range(0.0, 0.1)) = 0.0
         _OutlineColor ("Outline Color", Color) = (0, 0, 0, 0)
     }
@@ -95,10 +105,23 @@ Shader "Fast Campus/Lit - Toon"
             #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX _ADDITIONAL_LIGHTS
             #pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
 
+            struct LitData
+            {
+                half3 baseColor;
+                half3 shadeColor;
+                float4 shadowCoord;
+                float3 positionWS;
+                float3 normal;
+                half3 gi;
+            };
+
             Varyings Vert(const Attributes input)
             {
                 const VertexPositionInputs positionInputs = GetVertexPositionInputs(input.positionOS.xyz);
                 const VertexNormalInputs normalInputs = GetVertexNormalInputs(input.normalOS);
+
+                const float fogFactor = ComputeFogFactor(positionInputs.positionCS.z);
+                const half3 gi = SampleSH(normalInputs.normalWS);
 
                 Varyings output;
                 output.position = positionInputs.positionCS;
@@ -106,26 +129,52 @@ Shader "Fast Campus/Lit - Toon"
                 output.uv = input.uv;
                 output.positionWS = positionInputs.positionWS.xyz;
                 output.color = input.color;
+                output.fogFactorAndGi = float4(fogFactor, gi.xyz);
                 return output;
+            }
+
+            half ToonRadiance(const float3 normal, const float3 light, const half attenuation)
+            {
+                const float ndl = dot(normal, light) + _Offset;
+                const float radiance = ndl;
+                return step(0.0f, radiance) * attenuation;
+            }
+
+            half3 Lit(const LitData litData)
+            {
+                const Light lit = GetMainLight(litData.shadowCoord, litData.positionWS, half4(1, 1, 1, 1));
+                const float att = lit.shadowAttenuation * lit.distanceAttenuation;
+                
+                const half radiance = ToonRadiance(litData.normal, lit.direction, att);
+                const half3 color = lerp(litData.shadeColor.xyz, litData.baseColor.xyz, radiance) + litData.gi;
+                return color;
+            }
+
+            LitData InitializeLitData(const Varyings input)
+            {
+                const float2 uv = input.uv.xy;
+                const half4 baseColor = _BaseColorTex.Sample(sampler_BaseColorTex, uv);
+                const half4 shadeColor = _ShadeColorTex.Sample(sampler_ShadeColorTex, uv);
+                const float4 shadowCoord = TransformWorldToShadowCoord(input.positionWS);
+                const half3 gi = input.fogFactorAndGi.yzw;
+
+                LitData litData;
+                litData.baseColor = baseColor.xyz * _LitColorTint.xyz;
+                litData.shadeColor = shadeColor.xyz * _ShadeColorTint.xyz;
+                litData.shadowCoord = shadowCoord;
+                litData.positionWS = input.positionWS;
+                litData.normal = normalize(input.normalWs.xyz);
+                litData.gi = gi;
+                return litData;
             }
 
             half4 Frag(const Varyings input) : SV_TARGET
             {
-                const float2 uv = input.uv.xy;
-                const half4 baseColor = _BaseColor.Sample(sampler_BaseColor, uv);
-                const half4 shadeColor = _ShadeColor.Sample(sampler_ShadeColor, uv);
-                const float4 shadowCoord = TransformWorldToShadowCoord(input.positionWS);
-
-                const Light lit = GetMainLight(shadowCoord, input.positionWS, half4(1, 1, 1, 1));
-                const float att = lit.shadowAttenuation * lit.distanceAttenuation;
-
-                const float3 normal = normalize(input.normalWs.xyz);
-                const float3 light = lit.direction;
-                const float ndl = dot(normal, light) + _Offset;
-                const float radiance = ndl;
-                const float radianceCut = step(0.0f, radiance) * att;
-                const half4 color = lerp(shadeColor, baseColor, radianceCut);
-                return half4(color.xyz, 1.0h);
+                const LitData litData = InitializeLitData(input);
+                const half fogFactor = input.fogFactorAndGi.x;
+                half3 lit = Lit(litData);
+                lit = MixFog(lit, fogFactor);
+                return half4(lit.xyz, 1.0h);
             }
             ENDHLSL
         }
@@ -154,10 +203,16 @@ Shader "Fast Campus/Lit - Toon"
 
                 Varyings output = (Varyings)0;
                 output.position = positionCS;
+                output.uv = input.uv;
                 return output;
             }
 
-            half4 FragOutline(const Varyings input) : SV_TARGET { return _OutlineColor; }
+            half4 FragOutline(const Varyings input) : SV_TARGET
+            {
+                const float2 uv = input.uv;
+                const half4 outlineColorTex = _OutlineColorTex.Sample(sampler_OutlineColorTex, uv);
+                return half4(outlineColorTex.xyz * _OutlineColor.xyz, 1.0h);
+            }
             ENDHLSL
         }
 

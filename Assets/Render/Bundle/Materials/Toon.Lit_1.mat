@@ -7,7 +7,7 @@ Material:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: Toon.Lit
+  m_Name: Toon.Lit_1
   m_Shader: {fileID: 4800000, guid: fc20ba81f01f4b589d3a810ab43eb2e8, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
@@ -36,5 +36,7 @@ Material:
     - _Offset: 0.125
     - _OutlineWidth: 0.026
     m_Colors:
-    - _OutlineColor: {r: 0.254717, g: 0.015619445, b: 0.015619445, a: 1}
+    - _LitColorTint: {r: 1, g: 0.30639192, b: 0.16509432, a: 1}
+    - _OutlineColor: {r: 0.2738519, g: 0.28926155, b: 0.3207547, a: 1}
+    - _ShadeColorTint: {r: 0.5876845, g: 0.8584906, b: 0.31181023, a: 1}
   m_BuildTextureStacks: []
